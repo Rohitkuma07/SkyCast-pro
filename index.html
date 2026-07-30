@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>SkyCast Pro - Weather Dashboard</title>
+
+    <!-- Main CSS -->
+    <link rel="stylesheet" href="css/style.css">
+
+    <!-- Responsive CSS -->
+    <link rel="stylesheet" href="css/responsive.css">
+
+    <!-- Google Fonts -->
+    <link
+        href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap"
+        rel="stylesheet">
+
+    <!-- Font Awesome Icons -->
+    <link rel="stylesheet"
+        href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css">
+        <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+</head>
+
+<body>
+    <!-- Navbar Start -->
+<nav class="navbar">
+
+    <div class="logo">
+        <i class="fa-solid fa-cloud-sun"></i>
+        <span>SkyCast Pro</span>
+    </div>
+
+    <div class="nav-links">
+        <a href="#">Home</a>
+        <a href="#">Forecast</a>
+        <a href="#">Map</a>
+        <a href="#">AQI</a>
+        <a href="#">About</a>
+    </div>
+
+    <button id="themeBtn" class="theme-btn">
+        <i class="fa-solid fa-moon"></i>
+    </button>
+    <div id="loader">
+    <div class="spinner"></div>
+</div>
+
+<div id="errorBox" class="error-box">
+    <i class="fa-solid fa-circle-exclamation"></i>
+    <span id="errorText">City not found</span>
+</div>
+
+</nav>
+<!-- Navbar End -->
+ <!-- Hero Section Start -->
+<section class="hero">
+
+    <div class="hero-content">
+
+        <h1>Real-Time Weather Intelligence</h1>
+
+        <p>
+            Track live weather, AQI, forecasts and interactive maps
+            with one powerful dashboard.
+        </p>
+
+        <div class="search-box">
+
+    <input type="text" id="cityInput" placeholder="Search any city...">
+
+    <button id="searchBtn">
+        <i class="fa-solid fa-magnifying-glass"></i>
+    </button>
+
+    <button id="voiceBtn">
+        <i class="fa-solid fa-microphone"></i>
+    </button>
+
+</div>
+
+<button id="locationBtn">
+    <i class="fa-solid fa-location-dot"></i>
+    My Location
+</button>
+
+</div>
+
+    </div>
+
+</section>
+<!-- Hero Section End -->
+ <!-- Current Weather Card Start -->
+
+<section class="weather-section">
+
+    <div class="weather-card">
+
+        <div class="weather-left">
+
+            <h2 id="cityName">New Delhi</h2>
+
+           <div class="weather-icon">
+    <img id="weatherIcon" src="" alt="Weather Icon">
+</div>
+            <h1 id="temperature">29°C</h1>
+
+            <p id="weatherCondition">🌤️ Partly Cloudy</p>
+
+        </div>
+
+        <div class="weather-right">
+
+            <div class="weather-info">
+                <i class="fa-solid fa-droplet"></i>
+                <span id="humidity">Humidity : 68%</span>
+            </div>
+
+            <div class="weather-info">
+                <i class="fa-solid fa-wind"></i>
+                <span id="wind">Wind : 14 km/h</span>
+            </div>
+
+            <div class="weather-info">
+                <i class="fa-solid fa-temperature-half"></i>
+                <span id="feelsLike">Feels Like : 31°C</span>
+            </div>
+
+        </div>
+
+    </div>
+
+</section>
+
+<!-- Current Weather Card End -->
+ <!-- Today's Highlights Start -->
+
+<section class="highlights">
+
+    <h2 class="section-title">Today's Highlights</h2>
+
+    <div class="highlight-grid">
+
+        <div class="highlight-card">
+            <i class="fa-solid fa-sun"></i>
+            <h3>UV Index</h3>
+            <p>6.2</p>
+        </div>
+
+        <div class="highlight-card">
+            <i class="fa-solid fa-droplet"></i>
+            <h3>Humidity</h3>
+            <p>68%</p>
+        </div>
+
+        <div class="highlight-card">
+            <i class="fa-solid fa-wind"></i>
+            <h3>Wind Speed</h3>
+            <p>14 km/h</p>
+        </div>
+
+        <div class="highlight-card">
+            <i class="fa-solid fa-eye"></i>
+            <h3>Visibility</h3>
+            <p>10 km</p>
+        </div>
+
+        <div class="highlight-card">
+            <i class="fa-solid fa-sun"></i>
+            <h3 id="sunrise">Sunrise</h3>
+            <p>05:42 AM</p>
+        </div>
+
+        <div class="highlight-card">
+            <i class="fa-solid fa-cloud-sun"></i>
+            <h3 id="sunset">Sunset</h3>
+            <p>06:58 PM</p>
+        </div>
+
+    </div>
+
+</section>
+
+<!-- Today's Highlights End -->
+ <!-- Hourly Forecast Start -->
+
+<section class="hourly-section">
+
+    <h2 class="section-title">Hourly Forecast</h2>
+
+    <div class="hourly-container">
+
+        <div class="hour-card">
+            <h3>9 AM</h3>
+            <i class="fa-solid fa-sun"></i>
+            <p>28°C</p>
+        </div>
+
+        <div class="hour-card">
+            <h3>10 AM</h3>
+            <i class="fa-solid fa-cloud-sun"></i>
+            <p>29°C</p>
+        </div>
+
+        <div class="hour-card">
+            <h3>11 AM</h3>
+            <i class="fa-solid fa-cloud"></i>
+            <p>30°C</p>
+        </div>
+
+        <div class="hour-card">
+            <h3>12 PM</h3>
+            <i class="fa-solid fa-cloud-rain"></i>
+            <p>27°C</p>
+        </div>
+
+        <div class="hour-card">
+            <h3>1 PM</h3>
+            <i class="fa-solid fa-sun"></i>
+            <p>31°C</p>
+        </div>
+
+        <div class="hour-card">
+            <h3>2 PM</h3>
+            <i class="fa-solid fa-cloud"></i>
+            <p>30°C</p>
+        </div>
+
+    </div>
+
+</section>
+
+<!-- Hourly Forecast End -->
+
+<!-- 7-Day Forecast Start -->
+
+<section class="forecast-section">
+
+    <h2 class="section-title">7-Day Forecast</h2>
+
+    <div class="forecast-container" id="forecastContainer">
+
+        <div class="forecast-card">
+            <h3>Mon</h3>
+            <i class="fa-solid fa-sun"></i>
+            <p>32°C / 25°C</p>
+        </div>
+
+        <div class="forecast-card">
+            <h3>Tue</h3>
+            <i class="fa-solid fa-cloud-sun"></i>
+            <p>31°C / 24°C</p>
+        </div>
+
+        <div class="forecast-card">
+            <h3>Wed</h3>
+            <i class="fa-solid fa-cloud"></i>
+            <p>30°C / 24°C</p>
+        </div>
+
+        <div class="forecast-card">
+            <h3>Thu</h3>
+            <i class="fa-solid fa-cloud-rain"></i>
+            <p>28°C / 23°C</p>
+        </div>
+
+        <div class="forecast-card">
+            <h3>Fri</h3>
+            <i class="fa-solid fa-cloud-showers-heavy"></i>
+            <p>27°C / 22°C</p>
+        </div>
+
+        <div class="forecast-card">
+            <h3>Sat</h3>
+            <i class="fa-solid fa-cloud-sun"></i>
+            <p>30°C / 24°C</p>
+        </div>
+
+        <div class="forecast-card">
+            <h3>Sun</h3>
+            <i class="fa-solid fa-sun"></i>
+            <p>33°C / 26°C</p>
+        </div>
+
+    </div>
+
+</section>
+
+<!-- 7-Day Forecast End -->
+ <!-- AQI Section Start -->
+
+<section class="aqi-section">
+
+    <h2 class="section-title">Air Quality Index</h2>
+
+    <div class="aqi-container">
+
+        <div class="aqi-card">
+            <h3>AQI</h3>
+            <p class="aqi-value" id="aqiValue">72</p>
+            <span class="good">Moderate</span>
+        </div>
+
+        <div class="aqi-card">
+            <h3>PM2.5</h3>
+            <p id="pm25">18 µg/m³</p>
+        </div>
+
+        <div class="aqi-card">
+            <h3>PM10</h3>
+            <p id="pm10">42 µg/m³</p>
+        </div>
+
+        <div class="aqi-card">
+            <h3>CO</h3>
+            <p id="co">0.8 ppm</p>
+        </div>
+
+    </div>
+
+</section>
+
+<!-- AQI Section End -->
+ <!-- Weather Analytics Start -->
+
+<section class="chart-section">
+
+    <h2 class="section-title">Weather Analytics</h2>
+
+    <div class="chart-card">
+
+        <canvas id="weatherChart"></canvas>
+
+    </div>
+
+</section>
+<!-- Weather Map Start -->
+
+<section class="map-section">
+
+    <h2 class="section-title">Live Weather Map</h2>
+
+    <div class="map-card">
+        <div id="map"></div>
+    </div>
+
+</section>
+
+<!-- Weather Map End -->
+
+<!-- Weather Analytics End -->
+ <footer class="footer">
+
+    <h2>SkyCast Pro</h2>
+
+    <p>Real-Time Weather Dashboard</p>
+
+    <div class="footer-links">
+
+        <a href="#">Home</a>
+        <a href="#">Forecast</a>
+        <a href="#">AQI</a>
+        <a href="#">Map</a>
+
+    </div>
+
+    <p class="copyright">
+        © 2026 SkyCast Pro | Made by Rohit
+    </p>
+
+</footer>
+ <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+<!-- JavaScript Files -->
+<script src="js/app.js"></script>
+<script src="js/api.js"></script>
+<script src="js/chart.js"></script>
+
+<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+
+<script src="js/map.js"></script>
+<script src="js/voice.js"></script>
+<script src="js/theme.js"></script>
+
+</body>
+</html>

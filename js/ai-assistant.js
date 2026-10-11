@@ -271,6 +271,7 @@
     if (ctx.sources.env) b.push('<span class="ai-src-badge"><i class="fa-solid fa-sun"></i> UV & hourly: ' + esc(ctx.sources.env) + "</span>");
     if (ctx.sources.aqi) b.push('<span class="ai-src-badge"><i class="fa-solid fa-wind"></i> Air quality: ' + esc(ctx.sources.aqi) + "</span>");
     var t = new Date(ctx.updatedAt);
+    b.push('<span class="ai-src-badge"><i class="fa-solid fa-location-dot"></i> ' + esc(ctx.city) + ' local time ' + esc(AI.clock(ctx, Math.floor(Date.now() / 1000))) + "</span>");
     b.push('<span class="ai-src-badge"><i class="fa-regular fa-clock"></i> Updated ' + esc(t.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })) + "</span>");
     b.push('<span class="ai-src-badge"><i class="fa-solid fa-microchip"></i> ' + (backendEnabled() ? "AI model + live data" : "Live-data recommendations") + "</span>");
     els.sourceNote.innerHTML = b.join("");

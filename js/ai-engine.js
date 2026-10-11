@@ -459,6 +459,33 @@
     return dt >= sunrise && dt <= sunset;
   }
 
+  /* --- city-local / user-local clock helpers ----------------------------- */
+  const pad2 = (v) => (v < 10 ? "0" : "") + v;
+  // Absolute epoch (seconds) for a city-local wall-clock string "YYYY-MM-DDTHH:MM".
+  function localIsoToEpoch(iso, tz) {
+    if (!iso) return null;
+    const m = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})/.exec(String(iso));
+    if (!m) return null;
+    const asUTC = Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], 0) / 1000;
+    return asUTC - (tz || 0);
+  }
+  // Single source of truth for "now" (lets the reasoner and tests agree).
+  function nowSecOf(ctx) {
+    return (ctx && ctx.localNow && ctx.localNow.epoch) || Math.floor(Date.now() / 1000);
+  }
+  // The city's current local wall clock (real clock, not the observation time).
+  function cityNow(ctx) {
+    const epoch = Math.floor(Date.now() / 1000);
+    const lp = localParts(epoch, (ctx && ctx.tz) || 0);
+    return { epoch: epoch, hour: lp.hour, min: lp.min, date: lp.date, day: lp.day };
+  }
+  function slotEpoch(ctx, s) {
+    if (!s) return null;
+    if (s.iso) return localIsoToEpoch(s.iso, ctx.tz);
+    if (s.date && s.hour != null) return localIsoToEpoch(s.date + "T" + pad2(s.hour) + ":00", ctx.tz);
+    return null;
+  }
+
   function buildContext(store) {
     const ctx = { available: false, store: store || null };
     const cur = store && store.current;
@@ -497,6 +524,14 @@
     ctx.now.windChill = windChillC(ctx.now.temp, ctx.now.windKmh);
     ctx.now.dewPoint = dewPointC(ctx.now.temp, ctx.now.humidity);
     ctx.now.windDir = compass(ctx.now.windDeg);
+
+    // Time awareness: the city's own local clock + the user's local clock.
+    ctx.localNow = cityNow(ctx);
+    const ud = new Date();
+    ctx.userLocalNow = {
+      epoch: Math.floor(ud.getTime() / 1000), hour: ud.getHours(), min: ud.getMinutes(),
+      date: ud.getFullYear() + "-" + pad2(ud.getMonth() + 1) + "-" + pad2(ud.getDate()), day: ud.getDay(),
+    };
 
     /* --- air quality (OpenWeatherMap 1..5 scale) --- */
     const aq = store.aqi && store.aqi.list && store.aqi.list[0];
@@ -700,8 +735,11 @@
 
   // rain chance over the next ~6 hours (max of the next two 3h slots)
   function nextPop(ctx) {
+    const nowSec = nowSecOf(ctx);
     let p = null;
-    const near = ctx.timeline.slice(0, 3);
+    const near = ctx.timeline
+      .filter((s) => { const e = slotEpoch(ctx, s); return e == null || e >= nowSec - 30 * 60; })
+      .slice(0, 3);
     near.forEach((s) => { if (s.pop != null) p = p == null ? s.pop : Math.max(p, s.pop); });
     if (p == null && ctx.now.precip !== "none") p = 90;
     return p;
@@ -840,18 +878,18 @@
     return h12 + " " + ampm;
   }
 
-  function bestWindow(ctx, lang, activityKey) {
+  function bestWindow(ctx, lang, activityKey, onlyDate) {
     if (!ctx.available || !ctx.timeline.length) return null;
     const def = activityKey ? ACTIVITIES[activityKey] : null;
     const prof = def && def.intensity === "high" ? PROFILE.highIntensity : PROFILE.weights;
-    const nowMs = Date.now();
+    const nowSec = nowSecOf(ctx);
+    const todayDate = (ctx.localNow && ctx.localNow.date) || (ctx.timeline[0] && ctx.timeline[0].date);
     let best = null;
     ctx.timeline.forEach((s, i) => {
-      // skip the immediate past (Open-Meteo returns from 00:00 of today)
-      if (s.iso) {
-        const ts = Date.parse(s.iso);
-        if (!isNaN(ts) && ts < nowMs - 60 * 60 * 1000) return;
-      }
+      if (onlyDate && s.date !== onlyDate) return;
+      // skip times that have already passed (in the city's own timezone)
+      const e = slotEpoch(ctx, s);
+      if (e != null && e < nowSec - 60 * 60) return;
       // outdoor activities only make sense in daylight
       if (def && def.outdoor && (s.hour < 6 || s.hour > 20)) return;
       const res = microScore({
@@ -861,7 +899,7 @@
       }, prof);
       let sc = res.score;
       if (s.thunder) sc = Math.min(sc, 15);
-      const isTomorrow = s.date !== ctx.timeline[0].date;
+      const isTomorrow = s.date !== todayDate;
       if (best == null || sc > best.score) best = { slot: s, score: sc, index: i, isTomorrow: isTomorrow };
     });
     if (!best) return null;
@@ -1151,28 +1189,189 @@
     for (const k in SPORTS) if (hasAny(s, SPORTS[k])) return k;
     return null;
   }
+
+  /* --- time parsing (uses the city's real local clock) ------------------ */
+  const PERIOD_RANGE = { morning: [6, 11], afternoon: [12, 16], evening: [17, 21], night: [22, 5] };
+  const PERIOD_LABEL = {
+    morning: { en: "morning", hi: "सुबह" }, afternoon: { en: "afternoon", hi: "दोपहर" },
+    evening: { en: "evening", hi: "शाम" }, night: { en: "night", hi: "रात" },
+  };
+  function hourInPeriod(hour, key) {
+    const r = PERIOD_RANGE[key];
+    if (!r) return false;
+    return r[0] <= r[1] ? (hour >= r[0] && hour <= r[1]) : (hour >= r[0] || hour <= r[1]);
+  }
+  function fmtHour(h, m) {
+    const ampm = h < 12 ? "AM" : "PM";
+    const h12 = h % 12 === 0 ? 12 : h % 12;
+    return h12 + (m ? ":" + pad2(m) : "") + " " + ampm;
+  }
+
+  // Parse a free-text time request. key: "now"|"morning"|"afternoon"|"evening"|"night"|"hour"|"day".
   function detectWhen(s, ctx, lang) {
     const hi = pickLang(lang) === "hi";
-    const now = { label: hi ? "अभी" : "now" };
-    if (/\b(tomorrow|kal)\b/i.test(s) || s.indexOf("कल") >= 0 || s.indexOf("कल ") >= 0) return { key: "tomorrow", label: hi ? "कल" : "tomorrow" };
-    if (/\b(morning|subah|सुबह)\b/i.test(s) || s.indexOf("सुबह") >= 0) return { key: "morning", label: hi ? "सुबह" : "morning" };
-    if (/\b(afternoon|dopahar|दोपहर)\b/i.test(s) || s.indexOf("दोपहर") >= 0) return { key: "afternoon", label: hi ? "दोपहर" : "afternoon" };
-    if (/\b(evening|shaam|sham|शाम)\b/i.test(s) || s.indexOf("शाम") >= 0) return { key: "evening", label: hi ? "शाम" : "evening" };
-    if (/\b(night|raat|रात)\b/i.test(s) || s.indexOf("रात") >= 0) return { key: "night", label: hi ? "रात" : "night" };
-    if (/\b(now|abhi|अभी)\b/i.test(s) || s.indexOf("अभी") >= 0) return now;
-    return now;
+    const q = String(s || "").toLowerCase();
+    const dayOffset = (/\b(tomorrow|kal)\b/i.test(q) || q.indexOf("कल") >= 0) ? 1 : 0;
+    const tmr = dayOffset === 1 ? (hi ? " (कल)" : " (tomorrow)") : "";
+
+    let period = null;
+    if (/\bmorning\b|subah|सुबह/.test(q)) period = "morning";
+    else if (/\b(?:afternoon|dopahar|noon)\b|दोपहर/.test(q)) period = "afternoon";
+    else if (/\b(?:evening|tonight)\b|shaam|sham|शाम/.test(q)) period = "evening";
+    else if (/\bnight\b|raat|रात/.test(q)) period = "night";
+
+    let hour = null, minute = 0, explicit = false, m;
+    if ((m = /(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/i.exec(q))) {
+      hour = parseInt(m[1], 10) % 12 + (m[3].toLowerCase() === "pm" ? 12 : 0);
+      minute = m[2] ? parseInt(m[2], 10) : 0; explicit = true;
+    } else if ((m = /\b(\d{1,2}):(\d{2})\b/.exec(q))) {
+      hour = parseInt(m[1], 10); minute = parseInt(m[2], 10); explicit = true;
+    } else if ((m = /(\d{1,2})\s*(?:बजे|baje)/i.exec(q))) {
+      hour = parseInt(m[1], 10); explicit = true;
+    } else if ((m = /\bat\s+(\d{1,2})\b/i.exec(q))) {
+      hour = parseInt(m[1], 10); explicit = true;
+    }
+    if (explicit && !isNaN(hour) && hour >= 0 && hour <= 23) {
+      // a bare hour with no am/pm: infer the sensible half of the day
+      if (!/(am|pm)\b/i.test(q) && hour < 12 && hour >= 1 && period !== "morning") hour += 12;
+      return { key: "hour", hour: hour, minute: minute, dayOffset: dayOffset, label: fmtHour(hour, minute) + tmr };
+    }
+
+    if (period) return { key: period, hour: null, minute: 0, dayOffset: dayOffset, label: PERIOD_LABEL[period][hi ? "hi" : "en"] + tmr };
+    if (dayOffset === 1) return { key: "day", hour: null, minute: 0, dayOffset: 1, label: hi ? "कल" : "tomorrow" };
+    return { key: "now", hour: null, minute: 0, dayOffset: 0, label: hi ? "अभी" : "now" };
   }
-  function timelineForWhen(ctx, whenKey) {
+
+  function tlDates(ctx) {
+    const seen = [], dates = [];
+    ctx.timeline.forEach((s) => { if (seen.indexOf(s.date) < 0) { seen.push(s.date); dates.push(s.date); } });
+    dates.sort();
+    return dates;
+  }
+  // The city-local date for "today" (0) or "tomorrow" (1) inside the timeline.
+  function timelineDateFor(ctx, dayOffset) {
+    if (!ctx || !ctx.timeline || !ctx.timeline.length) return null;
+    const dates = tlDates(ctx);
+    const today = (ctx.localNow && ctx.localNow.date && dates.indexOf(ctx.localNow.date) >= 0)
+      ? ctx.localNow.date : dates[0];
+    if (dayOffset === 1) return dates[dates.indexOf(today) + 1] || null;
+    return today || null;
+  }
+  function timelineForWhen(ctx, whenKey, dayOffset) {
     if (!ctx || !ctx.timeline || !ctx.timeline.length) return [];
-    const today = ctx.timeline[0].date;
-    const tomorrow = ctx.timeline.find((s) => s.date !== today);
-    const tdate = tomorrow ? tomorrow.date : null;
-    if (whenKey === "tomorrow") return ctx.timeline.filter((s) => s.date === tdate);
-    if (whenKey === "morning") return ctx.timeline.filter((s) => s.date === today && s.hour >= 6 && s.hour <= 11);
-    if (whenKey === "afternoon") return ctx.timeline.filter((s) => s.date === today && s.hour >= 12 && s.hour <= 16);
-    if (whenKey === "evening") return ctx.timeline.filter((s) => s.date === today && s.hour >= 17 && s.hour <= 21);
-    if (whenKey === "night") return ctx.timeline.filter((s) => s.date === today && (s.hour >= 22 || s.hour <= 5));
-    return [];
+    const date = timelineDateFor(ctx, dayOffset || 0);
+    if (!date) return [];
+    return ctx.timeline.filter((s) => s.date === date && (whenKey === "day" || whenKey === "now" || hourInPeriod(s.hour, whenKey)));
+  }
+  function bestSlotIn(pool, ctx) {
+    let best = null;
+    pool.forEach((s) => {
+      const sc = microScore({
+        feels: s.feels, humidity: s.humidity, windKmh: s.windKmh, pop: s.pop, precipMm: s.precipMm,
+        precipKind: s.precip, thunder: s.thunder, uv: s.uv, aqi: ctx.aqi ? ctx.aqi.value : null, visKm: s.visKm,
+      }, PROFILE.weights).score;
+      if (!best || sc > best._sc) best = Object.assign({}, s, { _sc: sc });
+    });
+    return best;
+  }
+  // Compact "what we evaluated" line — only real, available values.
+  function condLine(ctx, slot, lang) {
+    const hi = pickLang(lang) === "hi";
+    const bits = [];
+    const temp = slot ? slot.temp : ctx.now.temp;
+    const feels = slot ? slot.feels : (ctx.now.feels != null ? ctx.now.feels : ctx.now.temp);
+    const hum = slot ? slot.humidity : ctx.now.humidity;
+    const wind = slot ? slot.windKmh : ctx.now.windKmh;
+    const pop = slot ? slot.pop : ctx.nextPop;
+    const uv = slot ? slot.uv : ctx.uv;
+    if (temp != null) bits.push((hi ? "तापमान " : "temp ") + Math.round(temp) + "°C");
+    if (feels != null && (temp == null || Math.abs(feels - temp) >= 1)) bits.push((hi ? "महसूस " : "feels ") + Math.round(feels) + "°C");
+    if (hum != null) bits.push((hi ? "नमी " : "humidity ") + Math.round(hum) + "%");
+    if (wind != null) bits.push((hi ? "हवा " : "wind ") + Math.round(wind) + (hi ? " किमी/घं" : " km/h"));
+    if (pop != null) bits.push((hi ? "बारिश " : "rain ") + Math.round(pop) + "%");
+    if (uv != null) bits.push("UV " + Math.round(uv));
+    return bits.join(" · ");
+  }
+
+  // Build a time-aware answer for an outdoor-activity question.
+  function activityAnswer(ctx, activity, req, lang) {
+    const hi = pickLang(lang) === "hi";
+    const city = ctx.localNow || cityNow(ctx);
+    const nowSec = nowSecOf(ctx);
+    const todayDate = timelineDateFor(ctx, 0);
+    const date = timelineDateFor(ctx, req.dayOffset || 0);
+    const def = ACTIVITIES[activity];
+    const items = [];
+    let mode = "slot", slot = null, past = false;
+    ctx.nextPop = nextPop(ctx); // upcoming rain chance (downstream "now" checks use it)
+
+    if (req.key === "now" && !req.dayOffset) {
+      mode = "now"; // evaluate current conditions, never a fixed clock time
+    } else if (!ctx.timeline.length) {
+      mode = "unknown";
+    } else if (req.key === "day") {
+      const w = timelineDateFor(ctx, 1) ? bestWindow(ctx, lang, activity, timelineDateFor(ctx, 1)) : null;
+      if (w) slot = w.slot; else mode = "unknown";
+    } else if (req.key === "hour") {
+      const tEpoch = date ? localIsoToEpoch(date + "T" + pad2(req.hour) + ":" + pad2(req.minute || 0) + ":00", ctx.tz) : null;
+      if (!date || tEpoch == null) mode = "unknown";
+      else if (tEpoch < nowSec) { mode = "past"; past = true; }
+      else {
+        let bestDiff = Infinity;
+        ctx.timeline.filter((s) => s.date === date).forEach((s) => {
+          const e = slotEpoch(ctx, s);
+          if (e == null || e < tEpoch - 30 * 60) return;
+          const d = Math.abs(e - tEpoch);
+          if (d < bestDiff) { bestDiff = d; slot = s; }
+        });
+        if (!slot) mode = "unknown";
+      }
+    } else {
+      const inPeriod = timelineForWhen(ctx, req.key, req.dayOffset || 0);
+      const future = inPeriod.filter((s) => { const e = slotEpoch(ctx, s); return e == null || e >= nowSec - 30 * 60; });
+      if (!req.dayOffset && inPeriod.length && !future.length) { mode = "past"; past = true; }
+      else { slot = bestSlotIn(future.length ? future : inPeriod, ctx); if (!slot) { mode = "past"; past = true; } }
+    }
+
+    const isTomorrow = slot && todayDate && slot.date !== todayDate;
+    const whenLabel = mode === "now" ? (hi ? "अभी" : "now")
+      : slot ? windowLabel(lang, slot) + (isTomorrow ? (hi ? " (कल)" : " (tomorrow)") : "") : req.label;
+    const disclaimer = hi ? "यह मौसम-आधारित सुझाव है, सेफ़्टी या मेडिकल प्रमाणन नहीं।"
+      : "Weather-based guide only — not a safety or medical clearance.";
+
+    if (mode === "past" || mode === "unknown") {
+      items.push(past
+        ? (hi ? req.label + " का समय आज बीत चुका है — " + ctx.city + " में अभी " + fmtHour(city.hour, city.min) + " हैं।"
+          : "The time you asked about (" + req.label + ") has already passed today — it's now " + fmtHour(city.hour, city.min) + " in " + ctx.city + ".")
+        : (hi ? req.label + " के लिए घंटेवार अनुमान अभी उपलब्ध नहीं है।"
+          : "I don't have an hour-by-hour forecast for " + req.label + " right now."));
+      const nx = bestWindow(ctx, lang, activity, null);
+      if (nx && nx.score >= 55) {
+        const sc = evaluateActivity(ctx, activity, lang, nx.slot, true);
+        items.push((hi ? "अगला अच्छा समय: " : "Next suitable time: ") + nx.label + (nx.tomorrow ? (hi ? " (कल)" : " (tomorrow)") : "") + " · " + sc.rating + (sc.score != null ? " (" + sc.score + "/100)" : ""));
+        const cl = condLine(ctx, nx.slot, lang);
+        if (cl) items.push(cl);
+        sc.tips.forEach((x) => items.push("• " + x));
+      } else {
+        items.push(hi ? "आज बचे समय में बाहर खेलने का अच्छा मौका नहीं दिख रहा — इनडोर विकल्प बेहतर है।"
+          : "No good outdoor window is left today — an indoor option is better.");
+        if (def && def.indoor) items.push((hi ? "इनडोर विकल्प: " : "Indoor option: ") + def.indoor[hi ? "hi" : "en"]);
+      }
+      items.push(disclaimer);
+      return { items: items, mode: past ? "past" : "unknown" };
+    }
+
+    const a = mode === "now"
+      ? evaluateActivity(ctx, activity, lang, null, true)
+      : evaluateActivity(ctx, activity, lang, slot, true);
+    items.push(a.name + " — " + whenLabel + ": " + a.rating + (a.score != null ? " (" + a.score + "/100)" : ""));
+    const cl = condLine(ctx, mode === "now" ? null : slot, lang);
+    if (cl) items.push(cl);
+    if (mode === "now") items.push((hi ? "मैंने अभी के असली मौसम की जाँच की (" + ctx.city + " में अभी " : "I checked the current conditions (it's now ") + fmtHour(city.hour, city.min) + (hi ? ")।" : " in " + ctx.city + ")."));
+    a.tips.forEach((x) => items.push("• " + x));
+    if (a.indoor && a.score < 65) items.push((hi ? "इनडोर विकल्प: " : "Indoor option: ") + a.indoor);
+    items.push(disclaimer);
+    return { items: items, mode: mode, slot: slot };
   }
 
   function answer(question, ctx, lang) {
@@ -1212,25 +1411,14 @@
     // activity intent (check early — many questions are about sports)
     const activity = detectActivity(q);
     if (activity) {
-      const when = detectWhen(q, ctx, lang);
-      const list = timelineForWhen(ctx, when.key);
-      let slot = null;
-      if (list.length) {
-        slot = list.reduce((best, s) => {
-          const sc = microScore({ feels: s.feels, humidity: s.humidity, windKmh: s.windKmh, pop: s.pop, precipMm: s.precipMm, precipKind: s.precip, thunder: s.thunder, uv: s.uv, aqi: ctx.aqi ? ctx.aqi.value : null, visKm: s.visKm }, PROFILE.weights).score;
-          return (!best || sc > best._sc) ? Object.assign({}, s, { _sc: sc }) : best;
-        }, null);
-      }
-      const a = slot ? evaluateActivity(ctx, activity, lang, slot, true) : evaluateActivity(ctx, activity, lang, null, true);
+      const req = detectWhen(q, ctx, lang);
+      const res = activityAnswer(ctx, activity, req, lang);
       out.intent = "activity";
-      const items = [];
-      items.push(a.name + ": " + a.rating + (a.score != null ? " (" + a.score + "/100)" : ""));
-      if (when.key !== "now") items.push((hi ? "समय: " : "Time: ") + when.label + (slot ? " · " + windowLabel(lang, slot) : ""));
-      a.tips.forEach((x) => items.push("• " + x));
-      if (a.indoor && a.score < 65) items.push((hi ? "इनडोर विकल्प: " : "Indoor option: ") + a.indoor);
-      out.sections.push(S("sports", items, "fa-person-running"));
-      const w = bestWindow(ctx, lang, activity);
-      if (w && w.score >= 55) out.sections.push(S("window", [(hi ? "सबसे अच्छा समय: " : "Best window: ") + w.label + (w.tomorrow ? (hi ? " (कल)" : " (tomorrow)") : "") + " · " + bandLabel(lang, w.band.key)], "fa-clock"));
+      out.sections.push(S("sports", res.items, "fa-person-running"));
+      if (res.mode !== "past") {
+        const w = bestWindow(ctx, lang, activity, null);
+        if (w && w.score >= 55) out.sections.push(S("window", [(hi ? "सबसे अच्छा समय: " : "Best window: ") + w.label + (w.tomorrow ? (hi ? " (कल)" : " (tomorrow)") : "") + " · " + bandLabel(lang, w.band.key)], "fa-clock"));
+      }
       const wl = warnings(ctx, lang);
       if (wl.length) out.sections.push(S("warnings", wl.filter((x) => x.level !== "info").map((x) => x.title + " — " + x.text), "fa-triangle-exclamation"));
       out.followups = ["best_time", "carry", "plan"];
@@ -1470,7 +1658,7 @@
     answer: answer,
     clock: clock,
     // exposed for testing / transparency
-    _internal: { microScore: microScore, heatIndexC: heatIndexC, windChillC: windChillC, dewPointC: dewPointC, bandOf: bandOf },
+    _internal: { microScore: microScore, heatIndexC: heatIndexC, windChillC: windChillC, dewPointC: dewPointC, bandOf: bandOf, detectWhen: detectWhen, localIsoToEpoch: localIsoToEpoch, slotEpoch: slotEpoch, timelineDateFor: timelineDateFor, hourInPeriod: hourInPeriod },
   };
 
   global.SkyCastAI = AI;

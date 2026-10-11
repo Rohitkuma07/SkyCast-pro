@@ -111,5 +111,10 @@ if (r3.intent !== "plan") fails.push("q3 expected plan, got " + r3.intent);
 if (r4.intent !== "summary") fails.push("q4 expected summary, got " + r4.intent);
 if (r5.intent !== "heat") fails.push("q5 expected heat, got " + r5.intent);
 if (bw && /अपराह्न/.test(bw.label)) fails.push("hindi window label still has अपराह्न: " + bw.label);
+// comfort factor bars need a 0-100 `penalty` (UI reads it for the bar width)
+const avail = c.factors.filter((f) => f.available);
+if (!avail.length) fails.push("comfort should expose available factors");
+else if (avail.some((f) => typeof f.penalty !== "number")) fails.push("factors must expose numeric penalty for bar width");
+else if (avail.every((f) => f.penalty === 0)) fails.push("hot/humid test context should produce nonzero penalty");
 if (fails.length) { console.log("FAILURES:\n" + fails.join("\n")); process.exit(1); }
 console.log("\nALL ENGINE TESTS PASS");

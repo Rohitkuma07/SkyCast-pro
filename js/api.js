@@ -155,7 +155,6 @@ const temps = [];
     dailyData.forEach(day => {
 
         const date = new Date(day.dt_txt);
-        updateChart(labels, temps);
 
         const dayName = date.toLocaleDateString("en-US", {
             weekday: "short"
@@ -172,6 +171,8 @@ temps.push(Math.round(day.main.temp));
         `;
 
     });
+
+    updateChart(labels, temps);
 
     publishSkyCast({ forecast: data });
 

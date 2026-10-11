@@ -744,7 +744,7 @@
       return {
         key: f.key, label: t(lang, "f_" + (f.key === "vis" ? "visibility" : f.key)),
         value: val, detail: factorDetail(lang, "f_" + (f.key === "vis" ? "visibility" : f.key), val),
-        deduction: Math.round(f.deduction), tone: tone, available: f.penalty != null,
+        deduction: Math.round(f.deduction), tone: tone, available: f.penalty != null, penalty: f.penalty,
       };
     });
 

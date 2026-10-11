@@ -816,52 +816,144 @@
     return t(lang, "rating_" + (key === "great" ? "great" : key === "good" ? "good" : key === "caution" ? "caution" : "avoid"));
   }
 
+  /* ---------- shared activity-risk assessment (single source of truth) ---- */
+  // Resolve the exact weather bundle used for a verdict ("now" or one forecast
+  // slot), so the score, the label, the explanation and the best-window search
+  // all evaluate the same numbers.
+  function activityInput(ctx, def, when) {
+    const slot = when != null ? when : null;
+    return {
+      temp: slot ? slot.temp : ctx.now.temp,
+      feels: slot ? slot.feels : (ctx.now.feels != null ? ctx.now.feels : ctx.now.temp),
+      humidity: slot ? slot.humidity : ctx.now.humidity,
+      windKmh: slot ? slot.windKmh : ctx.now.windKmh,
+      pop: slot ? slot.pop : ctx.nextPop,
+      uv: slot ? slot.uv : ctx.uv,
+      visKm: slot ? slot.visKm : ctx.now.visibilityKm,
+      aqi: ctx.aqi ? ctx.aqi.value : null,
+      thunder: slot ? !!slot.thunder : (ctx.now.kind === "thunder"),
+      precipMm: slot ? slot.precipMm : ctx.now.rain1h,
+      precipKind: slot ? slot.precip : ctx.now.precip,
+    };
+  }
+  // One weather-risk assessment for activities: microScore plus the
+  // activity-specific hard gates. evaluateActivity, bestWindow, bestSlotIn and
+  // the planner all use this, so scores, labels and suggestions never disagree.
+  function activityRisk(ctx, def, input, lang) {
+    const hi = pickLang(lang) === "hi";
+    const prof = def && def.intensity === "high" ? PROFILE.highIntensity : PROFILE.weights;
+    const res = microScore(input, prof);
+    let score = res.score;
+    const reasons = [];
+    const triggered = {};
+    const feels = input.feels, windKmh = input.windKmh, pop = input.pop,
+          visKm = input.visKm, aqi = input.aqi, thunder = input.thunder,
+          precipKind = input.precipKind;
+
+    if (thunder) { score = Math.min(score, 18); reasons.push(t(lang, "w_tstorm")); triggered.thunder = true; }
+    if (precipKind === "snow") { score = Math.min(score, 40); triggered.snow = true; }
+    if (def) {
+      if (feels != null && feels >= def.feelsMax + 3) {
+        score = Math.min(score, 35);
+        reasons.push(hi ? "महसूस " + Math.round(feels) + "°C — " + def.name.hi + " के लिए बहुत गरम" : "feels-like " + Math.round(feels) + "°C — too hot for " + def.name.en.toLowerCase());
+        triggered.heat = true;
+      }
+      if (windKmh != null && windKmh >= def.windMax + 10) {
+        score = Math.min(score, 40);
+        reasons.push(hi ? "हवा " + Math.round(windKmh) + " किमी/घं — बहुत तेज़" : "wind " + Math.round(windKmh) + " km/h — too strong");
+        triggered.wind = true;
+      }
+      if (pop != null && pop >= def.popMax + 25) {
+        score = Math.min(score, 45);
+        reasons.push(hi ? "बारिश की संभावना " + Math.round(pop) + "% — बहुत ज़्यादा" : "rain chance " + Math.round(pop) + "% — too wet");
+        triggered.rain = true;
+      }
+      if (aqi != null) {
+        if (aqi >= 5) score = Math.min(score, def.intensity === "high" ? 25 : 40);
+        else if (aqi === 4 && def.intensity === "high") score = Math.min(score, 45);
+        if (aqi >= 4) {
+          reasons.push(hi ? "हवा की गुणवत्ता खराब (AQI " + aqi + "/5)" : "poor air quality (AQI " + aqi + "/5)");
+          triggered.aqi = true;
+        }
+      }
+      if (visKm != null && visKm < def.visMin) {
+        score = Math.min(score, 45);
+        reasons.push(hi ? "दृश्यता " + Math.round(visKm) + " किमी — काफ़ी कम" : "visibility " + Math.round(visKm) + " km — too low");
+        triggered.vis = true;
+      }
+    }
+    score = Math.round(clamp(score, 0, 100));
+    return { score: score, reasons: reasons, factors: res.factors, input: input, triggered: triggered };
+  }
+  // Bilingual "why this rating" explanation: hard-gate reasons first, then the
+  // top microScore factors (with their actual values) that pushed the score down.
+  function whyLines(a, lang) {
+    const hi = pickLang(lang) === "hi";
+    const lines = (a.reasons || []).slice();
+    const trig = a.triggered || {};
+    const items = [
+      { key: "humidity", get: () => a.input.humidity, pen: (v) => penaltyHumidity(v, a.input.feels) },
+      { key: "uv", get: () => a.input.uv, pen: penaltyUV },
+      { key: "feels", get: () => a.input.feels, pen: penaltyFeels, skip: trig.heat },
+      { key: "wind", get: () => a.input.windKmh, pen: penaltyWind, skip: trig.wind },
+      { key: "precip", get: () => a.input.pop, pen: (v) => penaltyPrecip(v, a.input.precipMm, a.input.precipKind, a.input.thunder), skip: trig.rain },
+      { key: "aqi", get: () => a.input.aqi, pen: penaltyAQI, skip: trig.aqi },
+      { key: "visibility", get: () => a.input.visKm, pen: penaltyVis, skip: trig.vis },
+    ];
+    items.forEach((f) => {
+      if (f.skip) return;
+      const v = f.get();
+      if (v == null) return;
+      const p = f.pen(v);
+      if (p == null || p < 18) return;
+      lines.push(factorImpact(f.key, v, hi));
+    });
+    return lines.slice(0, 6);
+  }
+  // Short bilingual "value — impact" line for one available weather dimension.
+  function factorImpact(key, v, hi) {
+    const r = Math.round;
+    switch (key) {
+      case "feels":
+        return hi ? "महसूस " + r(v) + "°C — " + (v >= 38 ? "बहुत गरम" : v >= 32 ? "गरम" : v <= 5 ? "बहुत ठंड" : v <= 12 ? "ठंडा" : "आरामदायक नहीं")
+          : "feels-like " + r(v) + "°C — " + (v >= 38 ? "very hot" : v >= 32 ? "hot" : v <= 5 ? "very cold" : v <= 12 ? "cold" : "uncomfortable");
+      case "humidity":
+        return hi ? "नमी " + r(v) + "% — " + (v >= 75 ? "घुटन भरी" : "अधिक") : "humidity " + r(v) + "% — " + (v >= 75 ? "muggy" : "high");
+      case "wind":
+        return hi ? "हवा " + r(v) + " किमी/घं — तेज़" : "wind " + r(v) + " km/h — strong";
+      case "precip":
+        return hi ? "बारिश की संभावना " + r(v) + "%" + (v >= 40 ? " — गीला/फिसलन" : " — कुछ संभावना") : "rain chance " + r(v) + "%" + (v >= 40 ? " — wet and slippery" : " — possible showers");
+      case "uv":
+        return (hi ? "यूवी " : "UV ") + r(v) + (v >= 8 ? (hi ? " — काफ़ी तेज़" : " — extreme") : v >= 6 ? (hi ? " — अधिक" : " — high") : v >= 3 ? (hi ? " — मध्यम" : " — moderate") : "");
+      case "aqi":
+        return hi ? "हवा की गुणवत्ता " + v + "/5 (OWM)" + (v >= 4 ? " — खराब" : "") : "air quality " + v + "/5 (OWM)" + (v >= 4 ? " — poor" : "");
+      case "visibility":
+        return hi ? "दृश्यता " + r(v) + " किमी — कम" : "visibility " + r(v) + " km — low";
+    }
+    return "";
+  }
+
   function evaluateActivity(ctx, key, lang, when, isShort) {
     const def = ACTIVITIES[key];
     if (!def || !ctx.available) return { key: key, name: def ? def.name[pickLang(lang)] : key, score: null };
-    const slot = when != null ? when : null;
-    const src = slot || ctx.now;
-    const feels = slot ? slot.feels : (ctx.now.feels != null ? ctx.now.feels : ctx.now.temp);
-    const humidity = slot ? slot.humidity : ctx.now.humidity;
-    const windKmh = slot ? slot.windKmh : ctx.now.windKmh;
-    const pop = slot ? slot.pop : ctx.nextPop;
-    const uv = slot ? slot.uv : ctx.uv;
-    const visKm = slot ? slot.visKm : ctx.now.visibilityKm;
-    const thunder = slot ? !!slot.thunder : (ctx.now.kind === "thunder");
-    const precipMm = slot ? slot.precipMm : ctx.now.rain1h;
-    const precipKind = slot ? slot.precip : ctx.now.precip;
-
-    const prof = def.intensity === "high" ? PROFILE.highIntensity : PROFILE.weights;
-    const res = microScore({ feels: feels, humidity: humidity, windKmh: windKmh, pop: pop, precipMm: precipMm, precipKind: precipKind, thunder: thunder, uv: uv, aqi: ctx.aqi ? ctx.aqi.value : null, visKm: visKm }, prof);
-
-    let score = res.score;
-    const reasons = [];
-
-    // activity-specific hard gates
-    if (thunder) { score = Math.min(score, 18); reasons.push(t(lang, "w_tstorm")); }
-    if (precipKind === "snow" && (slot ? true : ctx.now.precip === "snow")) score = Math.min(score, 40);
-    if (feels != null && feels >= def.feelsMax + 3) { score = Math.min(score, 35); }
-    if (windKmh != null && windKmh >= def.windMax + 10) { score = Math.min(score, 40); }
-    if (pop != null && pop >= def.popMax + 25) { score = Math.min(score, 45); }
-    if (ctx.aqi && ctx.aqi.value >= 5) { score = Math.min(score, def.intensity === "high" ? 25 : 40); }
-    else if (ctx.aqi && ctx.aqi.value === 4 && def.intensity === "high") score = Math.min(score, 45);
-    if (visKm != null && visKm < def.visMin) score = Math.min(score, 45);
-
-    score = Math.round(clamp(score, 0, 100));
+    const input = activityInput(ctx, def, when);
+    const risk = activityRisk(ctx, def, input, lang);
+    const score = risk.score;
     const rating = rateOf(score);
 
     const tips = [];
-    if (feels != null && feels >= 32) tips.push(pickLang(lang) === "hi" ? "तापमान अधिक — जल्दी थकान हो सकती है" : "Feels hot — expect faster fatigue");
-    if (humidity != null && humidity >= 75) tips.push(pickLang(lang) === "hi" ? "नमी अधिक — पसीना जल्दी रुकेगा" : "High humidity — sweat won't evaporate well");
-    if (pop != null && pop >= 40) tips.push(pickLang(lang) === "hi" ? "बारिश की संभावना — छाता रखें" : "Rain likely — keep an umbrella");
-    if (uv != null && uv >= 6) tips.push(pickLang(lang) === "hi" ? "यूवी अधिक — सनस्क्रीन लगाएँ" : "High UV — use sunscreen");
-    if (windKmh != null && windKmh >= 25) tips.push(pickLang(lang) === "hi" ? "तेज़ हवा — गेंद उड़ सकती है" : "Windy — ball/equipment may drift");
+    if (input.feels != null && input.feels >= 32) tips.push(pickLang(lang) === "hi" ? "तापमान अधिक — जल्दी थकान हो सकती है" : "Feels hot — expect faster fatigue");
+    if (input.humidity != null && input.humidity >= 75) tips.push(pickLang(lang) === "hi" ? "नमी अधिक — पसीना जल्दी रुकेगा" : "High humidity — sweat won't evaporate well");
+    if (input.pop != null && input.pop >= 40) tips.push(pickLang(lang) === "hi" ? "बारिश की संभावना — छाता रखें" : "Rain likely — keep an umbrella");
+    if (input.uv != null && input.uv >= 6) tips.push(pickLang(lang) === "hi" ? "यूवी अधिक — सनस्क्रीन लगाएँ" : "High UV — use sunscreen");
+    if (input.windKmh != null && input.windKmh >= 25) tips.push(pickLang(lang) === "hi" ? "तेज़ हवा — गेंद उड़ सकती है" : "Windy — ball/equipment may drift");
 
     const indoor = def.indoor ? def.indoor[pickLang(lang)] : null;
     return {
       key: key, name: def.name[pickLang(lang)], score: score,
       ratingKey: rating.key, rating: rateLabel(lang, rating.key), tone: rating.tone,
-      reasons: reasons, tips: tips, indoor: indoor, def: def,
+      reasons: risk.reasons, factors: risk.factors, input: input, triggered: risk.triggered,
+      tips: tips, indoor: indoor, def: def,
     };
   }
 
@@ -881,7 +973,6 @@
   function bestWindow(ctx, lang, activityKey, onlyDate) {
     if (!ctx.available || !ctx.timeline.length) return null;
     const def = activityKey ? ACTIVITIES[activityKey] : null;
-    const prof = def && def.intensity === "high" ? PROFILE.highIntensity : PROFILE.weights;
     const nowSec = nowSecOf(ctx);
     const todayDate = (ctx.localNow && ctx.localNow.date) || (ctx.timeline[0] && ctx.timeline[0].date);
     let best = null;
@@ -892,19 +983,17 @@
       if (e != null && e < nowSec - 60 * 60) return;
       // outdoor activities only make sense in daylight
       if (def && def.outdoor && (s.hour < 6 || s.hour > 20)) return;
-      const res = microScore({
-        feels: s.feels, humidity: s.humidity, windKmh: s.windKmh, pop: s.pop,
-        precipMm: s.precipMm, precipKind: s.precip, thunder: s.thunder,
-        uv: s.uv, aqi: ctx.aqi ? ctx.aqi.value : null, visKm: s.visKm,
-      }, prof);
-      let sc = res.score;
-      if (s.thunder) sc = Math.min(sc, 15);
+      // same risk model as evaluateActivity: microScore + activity hard gates
+      const risk = activityRisk(ctx, def, activityInput(ctx, def, s), lang);
+      const sc = risk.score;
       const isTomorrow = s.date !== todayDate;
-      if (best == null || sc > best.score) best = { slot: s, score: sc, index: i, isTomorrow: isTomorrow };
+      if (best == null || sc > best.score) best = { slot: s, score: sc, index: i, isTomorrow: isTomorrow, rating: rateOf(sc) };
     });
     if (!best) return null;
     return {
-      score: Math.round(best.score), band: bandOf(Math.round(best.score)),
+      score: Math.round(best.score), rating: best.rating, ratingLabel: rateLabel(lang, best.rating.key), tone: best.rating.tone,
+      // comfort-style band kept for the general "most comfortable window" view
+      band: bandOf(Math.round(best.score)),
       start: best.slot, label: windowLabel(lang, best.slot),
       tomorrow: best.isTomorrow, slot: best.slot,
     };
@@ -1043,8 +1132,8 @@
     const walk = bestWindow(ctx, lang, "walking");
     const run = bestWindow(ctx, lang, "running");
     const windows = [];
-    if (walk) windows.push({ activity: hi ? "टहलने" : "Walking", label: walk.label, band: bandLabel(lang, walk.band.key), tone: bandOf(walk.score).tone, tomorrow: walk.tomorrow });
-    if (run) windows.push({ activity: hi ? "दौड़ने" : "Running", label: run.label, band: bandLabel(lang, run.band.key), tone: bandOf(run.score).tone, tomorrow: run.tomorrow });
+    if (walk) windows.push({ activity: hi ? "टहलने" : "Walking", label: walk.label, band: walk.ratingLabel, tone: walk.rating.tone, tomorrow: walk.tomorrow });
+    if (run) windows.push({ activity: hi ? "दौड़ने" : "Running", label: run.label, band: run.ratingLabel, tone: run.rating.tone, tomorrow: run.tomorrow });
 
     const checklist = [];
     const feels = ctx.now.feels != null ? ctx.now.feels : ctx.now.temp;
@@ -1263,13 +1352,11 @@
     if (!date) return [];
     return ctx.timeline.filter((s) => s.date === date && (whenKey === "day" || whenKey === "now" || hourInPeriod(s.hour, whenKey)));
   }
-  function bestSlotIn(pool, ctx) {
+  function bestSlotIn(pool, ctx, activityKey, lang) {
+    const def = activityKey ? ACTIVITIES[activityKey] : null;
     let best = null;
     pool.forEach((s) => {
-      const sc = microScore({
-        feels: s.feels, humidity: s.humidity, windKmh: s.windKmh, pop: s.pop, precipMm: s.precipMm,
-        precipKind: s.precip, thunder: s.thunder, uv: s.uv, aqi: ctx.aqi ? ctx.aqi.value : null, visKm: s.visKm,
-      }, PROFILE.weights).score;
+      const sc = activityRisk(ctx, def, activityInput(ctx, def, s), lang).score;
       if (!best || sc > best._sc) best = Object.assign({}, s, { _sc: sc });
     });
     return best;
@@ -1294,7 +1381,7 @@
   }
 
   // Build a time-aware answer for an outdoor-activity question.
-  function activityAnswer(ctx, activity, req, lang) {
+  function activityAnswer(ctx, activity, req, lang, why) {
     const hi = pickLang(lang) === "hi";
     const city = ctx.localNow || cityNow(ctx);
     const nowSec = nowSecOf(ctx);
@@ -1330,7 +1417,7 @@
       const inPeriod = timelineForWhen(ctx, req.key, req.dayOffset || 0);
       const future = inPeriod.filter((s) => { const e = slotEpoch(ctx, s); return e == null || e >= nowSec - 30 * 60; });
       if (!req.dayOffset && inPeriod.length && !future.length) { mode = "past"; past = true; }
-      else { slot = bestSlotIn(future.length ? future : inPeriod, ctx); if (!slot) { mode = "past"; past = true; } }
+      else { slot = bestSlotIn(future.length ? future : inPeriod, ctx, activity, lang); if (!slot) { mode = "past"; past = true; } }
     }
 
     const isTomorrow = slot && todayDate && slot.date !== todayDate;
@@ -1367,12 +1454,28 @@
     items.push(a.name + " — " + whenLabel + ": " + a.rating + (a.score != null ? " (" + a.score + "/100)" : ""));
     const cl = condLine(ctx, mode === "now" ? null : slot, lang);
     if (cl) items.push(cl);
+    if (why && a && a.input) {
+      const ex = whyLines(a, lang);
+      if (ex.length) {
+        items.push(hi ? "वजह:" : "Why:");
+        ex.forEach((x) => items.push("• " + x));
+      } else {
+        items.push(hi ? "वजह: हालात ठीक हैं — कोई बड़ी रुकावट नहीं।" : "Why: conditions are fine — nothing significant is blocking it.");
+      }
+    }
     if (mode === "now") items.push((hi ? "मैंने अभी के असली मौसम की जाँच की (" + ctx.city + " में अभी " : "I checked the current conditions (it's now ") + fmtHour(city.hour, city.min) + (hi ? ")।" : " in " + ctx.city + ")."));
     a.tips.forEach((x) => items.push("• " + x));
+    // proportionate, measured heat care (never a safety guarantee)
+    if (a.input && a.input.feels != null && a.input.feels >= 30) {
+      items.push(hi ? "• गर्मी का ध्यान: शुरुआत धीमे करें, छाया में ब्रेक लें, पानी पिएँ।" : "• Heat care: start slow, take shade breaks and sip water.");
+    }
     if (a.indoor && a.score < 65) items.push((hi ? "इनडोर विकल्प: " : "Indoor option: ") + a.indoor);
     items.push(disclaimer);
     return { items: items, mode: mode, slot: slot };
   }
+
+  // "why" questions about an activity verdict (English + Hindi/Hinglish).
+  const WHY_RE = /\bwhy\b|क्यों|क्यूँ|क्युं|क्यूं|क्यो|kyun|kyo|reason|cause|वजह|कारण/;
 
   function answer(question, ctx, lang) {
     const L = pickLang(lang);
@@ -1412,12 +1515,20 @@
     const activity = detectActivity(q);
     if (activity) {
       const req = detectWhen(q, ctx, lang);
-      const res = activityAnswer(ctx, activity, req, lang);
+      const why = WHY_RE.test(q);
+      const res = activityAnswer(ctx, activity, req, lang, why);
       out.intent = "activity";
       out.sections.push(S("sports", res.items, "fa-person-running"));
       if (res.mode !== "past") {
         const w = bestWindow(ctx, lang, activity, null);
-        if (w && w.score >= 55) out.sections.push(S("window", [(hi ? "सबसे अच्छा समय: " : "Best window: ") + w.label + (w.tomorrow ? (hi ? " (कल)" : " (tomorrow)") : "") + " · " + bandLabel(lang, w.band.key)], "fa-clock"));
+        if (w && w.score >= 50) {
+          // same rating scale as the verdict itself, so a "Good" grade is never
+          // offered next to a "not recommended" one under the same conditions
+          const good = w.rating.key === "good" || w.rating.key === "great";
+          const head = good ? (hi ? "सबसे अच्छा समय: " : "Best window: ")
+            : (hi ? "बेहतर समय: " : "Better time: ");
+          out.sections.push(S("window", [head + w.label + (w.tomorrow ? (hi ? " (कल)" : " (tomorrow)") : "") + " · " + w.ratingLabel + " (" + w.score + "/100)" + (w.slot && w.slot.feels != null ? " · " + (hi ? "महसूस " : "feels ") + Math.round(w.slot.feels) + "°C" : "")], "fa-clock"));
+        }
       }
       const wl = warnings(ctx, lang);
       if (wl.length) out.sections.push(S("warnings", wl.filter((x) => x.level !== "info").map((x) => x.title + " — " + x.text), "fa-triangle-exclamation"));
@@ -1658,7 +1769,7 @@
     answer: answer,
     clock: clock,
     // exposed for testing / transparency
-    _internal: { microScore: microScore, heatIndexC: heatIndexC, windChillC: windChillC, dewPointC: dewPointC, bandOf: bandOf, detectWhen: detectWhen, localIsoToEpoch: localIsoToEpoch, slotEpoch: slotEpoch, timelineDateFor: timelineDateFor, hourInPeriod: hourInPeriod },
+    _internal: { microScore: microScore, heatIndexC: heatIndexC, windChillC: windChillC, dewPointC: dewPointC, bandOf: bandOf, rateOf: rateOf, rateLabel: rateLabel, activityRisk: activityRisk, activityInput: activityInput, factorImpact: factorImpact, whyLines: whyLines, detectWhen: detectWhen, localIsoToEpoch: localIsoToEpoch, slotEpoch: slotEpoch, timelineDateFor: timelineDateFor, hourInPeriod: hourInPeriod },
   };
 
   global.SkyCastAI = AI;

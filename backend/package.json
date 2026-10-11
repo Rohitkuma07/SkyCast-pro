@@ -1,0 +1,15 @@
+{
+  "name": "skycast-pro-ai-backend",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Optional secure AI proxy for the SkyCast Pro AI Weather Lifestyle Assistant. Holds the AI provider key server-side.",
+  "scripts": {
+    "dev:vercel": "vercel dev",
+    "dev:netlify": "netlify dev",
+    "deploy:vercel": "vercel --prod",
+    "deploy:netlify": "netlify deploy --prod"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

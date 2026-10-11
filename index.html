@@ -13,6 +13,9 @@
     <!-- Responsive CSS -->
     <link rel="stylesheet" href="css/responsive.css">
 
+    <!-- AI Assistant CSS -->
+    <link rel="stylesheet" href="css/ai-assistant.css">
+
     <!-- Google Fonts -->
     <link
         href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap"
@@ -38,6 +41,7 @@
         <a href="#">Forecast</a>
         <a href="#">Map</a>
         <a href="#">AQI</a>
+        <a href="#ai-assistant" class="ai-nav-link"><i class="fa-solid fa-robot"></i> AI Assistant</a>
         <a href="#">About</a>
     </div>
 
@@ -134,6 +138,78 @@
 
 </section>
 
+<!-- AI Weather Lifestyle Assistant Start -->
+<section class="ai-section" id="ai-assistant" aria-label="AI Weather Lifestyle Assistant">
+
+    <div class="ai-header">
+        <div class="ai-title-wrap">
+            <div class="ai-orbit" aria-hidden="true"><i class="fa-solid fa-robot"></i></div>
+            <div>
+                <span class="ai-eyebrow">AI Weather Lifestyle Assistant</span>
+                <h2 class="section-title ai-title" id="aiGreeting">Hello 👋</h2>
+                <p class="ai-subtitle" id="aiSubtitle">Loading your live weather briefing…</p>
+            </div>
+        </div>
+        <div class="ai-controls">
+            <label class="ai-lang" title="Assistant language">
+                <i class="fa-solid fa-language" aria-hidden="true"></i>
+                <select id="aiLang" aria-label="Assistant language">
+                    <option value="auto">Auto</option>
+                    <option value="en">English</option>
+                    <option value="hi">हिंदी</option>
+                </select>
+            </label>
+            <button id="aiRefresh" class="ai-icon-btn" type="button" aria-label="Refresh assistant" title="Refresh">
+                <i class="fa-solid fa-rotate" aria-hidden="true"></i>
+            </button>
+        </div>
+    </div>
+
+    <div class="ai-source-note" id="aiSourceNote" aria-live="polite"></div>
+
+    <div class="ai-state" id="aiState" role="status">
+        <i class="fa-solid fa-spinner fa-spin" id="aiStateIcon" aria-hidden="true"></i>
+        <h3 id="aiStateTitle">Loading live weather…</h3>
+        <p id="aiStateText">Fetching the latest conditions.</p>
+        <div class="ai-state-actions" id="aiStateActions"></div>
+    </div>
+
+    <div class="ai-content" id="aiContent">
+        <div id="aiComfort"></div>
+        <div class="ai-grid" id="aiGrid"></div>
+        <div id="aiPlanner"></div>
+        <div id="aiWarnings"></div>
+
+        <div class="ai-chat">
+            <div class="ai-chat-head">
+                <div class="ai-card-icon"><i class="fa-solid fa-comments" aria-hidden="true"></i></div>
+                <div>
+                    <h3>Ask the assistant</h3>
+                    <p>Weather-aware answers in English or Hindi</p>
+                </div>
+            </div>
+            <div class="ai-log" id="aiChatLog" role="log" aria-live="polite" aria-label="Assistant conversation"></div>
+            <div class="ai-suggest" id="aiSuggest" aria-label="Suggested questions"></div>
+            <form class="ai-form" id="aiForm" autocomplete="off">
+                <button type="button" class="ai-round-btn" id="aiMic" aria-label="Voice input" title="Speak your question">
+                    <i class="fa-solid fa-microphone" aria-hidden="true"></i>
+                </button>
+                <label for="aiInput" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)">Ask the assistant</label>
+                <input id="aiInput" type="text" placeholder="Ask about clothes, sports, food, rain…" maxlength="400" aria-label="Ask the assistant">
+                <button type="submit" class="ai-round-btn ai-primary" id="aiSend" aria-label="Send question">
+                    <i class="fa-solid fa-paper-plane" aria-hidden="true"></i>
+                </button>
+            </form>
+            <p class="ai-chat-hint" id="aiChatHint"></p>
+        </div>
+    </div>
+</section>
+
+<button id="aiLauncher" class="ai-launcher" type="button" aria-label="Open AI assistant" title="AI assistant">
+    <i class="fa-solid fa-robot" aria-hidden="true"></i>
+</button>
+<!-- AI Weather Lifestyle Assistant End -->
+
 <!-- Current Weather Card End -->
  <!-- Today's Highlights Start -->
 
@@ -146,25 +222,25 @@
         <div class="highlight-card">
             <i class="fa-solid fa-sun"></i>
             <h3>UV Index</h3>
-            <p>6.2</p>
+            <p id="uvValue">—</p>
         </div>
 
         <div class="highlight-card">
             <i class="fa-solid fa-droplet"></i>
             <h3>Humidity</h3>
-            <p>68%</p>
+            <p id="highlightHumidity">—</p>
         </div>
 
         <div class="highlight-card">
             <i class="fa-solid fa-wind"></i>
             <h3>Wind Speed</h3>
-            <p>14 km/h</p>
+            <p id="highlightWind">—</p>
         </div>
 
         <div class="highlight-card">
             <i class="fa-solid fa-eye"></i>
             <h3>Visibility</h3>
-            <p>10 km</p>
+            <p id="highlightVisibility">—</p>
         </div>
 
         <div class="highlight-card">
@@ -363,6 +439,7 @@
         <a href="#">Forecast</a>
         <a href="#">AQI</a>
         <a href="#">Map</a>
+        <a href="#ai-assistant">AI Assistant</a>
 
     </div>
 
@@ -383,6 +460,10 @@
 <script src="js/map.js"></script>
 <script src="js/voice.js"></script>
 <script src="js/theme.js"></script>
+
+<!-- AI Assistant: reasoning engine + UI (loads last, uses data published by api.js) -->
+<script src="js/ai-engine.js"></script>
+<script src="js/ai-assistant.js"></script>
 
 </body>
 </html>
